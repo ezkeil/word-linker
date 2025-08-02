@@ -1,0 +1,133 @@
+version: '3.8'
+
+services:
+  # Hadoop NameNode and core services
+  namenode:
+    image: big-data-europe/hadoop-namenode:3.2.1 # Or another suitable Hadoop image from Docker Hub
+    container_name: namenode
+    ports:
+      - "9870:9870" # HDFS web UI
+      - "9000:9000" # HDFS default port
+    volumes:
+      - namenode_data:/hadoop/dfs/name
+    environment:
+      - CLUSTER_NAME=hadoop-cluster
+      - CORE_SITE_dfs_namenode_datanode_replication_bandwidth__per__sec=104857600
+    env_file:
+      - ./hadoop.env # For environment variables like HADOOP_USER_NAME if needed
+    healthcheck:
+      test: ["CMD", "hdfs", "dfsadmin", "-report"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Hadoop DataNode
+  datanode:
+    image: big-data-europe/hadoop-datanode:3.2.1 # Or another suitable Hadoop image from Docker Hub
+    container_name: datanode
+    volumes:
+      - datanode_data:/hadoop/dfs/data
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - namenode
+    healthcheck:
+      test: ["CMD", "hdfs", "dfsadmin", "-report"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Hadoop ResourceManager (YARN)
+  resourcemanager:
+    image: big-data-europe/hadoop-resourcemanager:3.2.1 # Or another suitable Hadoop image from Docker Hub
+    container_name: resourcemanager
+    ports:
+      - "8088:8088" # YARN web UI
+    environment:
+      - SERVICE_PRECONDITION=namenode:9000 datanode:9864
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - namenode
+      - datanode
+    healthcheck:
+      test: ["CMD", "yarn", "top"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Hadoop NodeManager (YARN)
+  nodemanager:
+    image: big-data-europe/hadoop-nodemanager:3.2.1 # Or another suitable Hadoop image from Docker Hub
+    container_name: nodemanager
+    environment:
+      - SERVICE_PRECONDITION=namenode:9000 datanode:9864 resourcemanager:8088
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - namenode
+      - datanode
+      - resourcemanager
+    healthcheck:
+      test: ["CMD", "yarn", "node", "-list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Your Hadoop MapReduce application runner
+  hadoop-app-runner:
+    build:
+      context: . # This indicates the build context is the current directory (where docker-compose.yaml is)
+      dockerfile: Dockerfile-hadoop-app # This tells Docker Compose to use your specific Dockerfile
+    container_name: hadoop-app-runner
+    # Set entrypoint to keep container running for manual commands,
+    # or to run your job directly.
+    entrypoint: ["/bin/bash"]
+    depends_on:
+      namenode:
+        condition: service_healthy # Ensure NameNode is up before trying to run app
+      resourcemanager:
+        condition: service_healthy # Ensure ResourceManager is up
+    # Give it a bit more memory if your job is complex (adjust based on your system)
+    mem_limit: 2g
+
+  # Neo4j Graph Database
+  neo4j:
+    image: neo4j:latest # Using the latest official Neo4j image
+    container_name: neo4j
+    ports:
+      - "7474:7474" # Neo4j Browser HTTP
+      - "7687:7687" # Bolt protocol for programmatic access
+    volumes:
+      - neo4j_data:/data # Persistent storage for Neo4j database files
+      - ./neo4j_import:/var/lib/neo4j/import # Crucial for importing CSVs from your host
+    environment:
+      # IMPORTANT: Set a strong password for production
+      - NEO4J_AUTH=neo4j/your_strong_password
+      # Memory settings for Neo4j - adjust based on your host's available RAM
+      - NEO4J_dbms_memory_heap_max__size=512M
+      - NEO4J_dbms_memory_pagecache_size=512M
+      # Enable APOC procedures for easier import/export (highly recommended)
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*,algo.* # Allow APOC/Algo procedures
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      # You could set this to service_healthy if you want Neo4j to wait for the Hadoop job
+      # to finish *before* starting, but service_started is usually sufficient
+      # if you're manually triggering the import later.
+      hadoop-app-runner:
+        condition: service_started
+
+# Define named volumes for persistent data
+volumes:
+  namenode_data:
+  datanode_data:
+  neo4j_data:
+  neo4j_import: # This volume is crucial for importing data into Neo4j
