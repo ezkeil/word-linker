@@ -24,9 +24,8 @@ The core purpose of this project is to transform the semi-structured data of Wor
 This is the key directory layout for the project:
 
 ```
-
 .
-├── Dockerfile-hadoop-app              # Defines the Docker image for the Hadoop application
+├── Dockerfile             			   # Defines the Docker image for the Hadoop application
 ├── assets/
 │   └── WordNet-3.0/
 │       └── dict/                      # Contains the WordNet database files (e.g., data.noun, index.verb)
